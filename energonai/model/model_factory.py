@@ -101,44 +101,41 @@ class PipelineModel(nn.Module):
                                  bias=False, dtype=dtype, vocab_parallel=vocab_parallel)
 
     def forward(self, hidden_states=None, input_ids=None, attention_mask=None, seq_lens=None, max_tokens: Optional[int] = None, top_k: Optional[int] = None, top_p: Optional[float] = None, temperature: Optional[float] = None):
+        """Run forward pass for a single token."""
         batch_size = input_ids.shape[0]
-        cur_len = input_ids.shape[1]
-        tgt_len = cur_len + 1 if not max_tokens else max_tokens
 
-        if(cur_len >= tgt_len):
-            return input_ids
+        if self.first:
+            hidden_states = self.embed(input_ids)
+        
+        if attention_mask is not None:
+            attention_unfold_mask = attention_mask.view(batch_size, -1)
+            attention_unfold_mask = attention_unfold_mask.unsqueeze(1).unsqueeze(2)
+            attention_unfold_mask = attention_unfold_mask.to(dtype=hidden_states.dtype)  # fp16 compatibility
+            attention_unfold_mask = (1.0 - attention_unfold_mask) * -10000.0
+        
+        for block in self.blocks:
+            hidden_states = block(
+                hidden_states=hidden_states,
+                attention_mask=attention_unfold_mask,
+                first_cache=True,
+            )
 
-        first_cache = True
-        for _ in range(cur_len, tgt_len):
-
-            if self.first:
-                hidden_states = self.embed(input_ids)
-
-            if attention_mask is not None:
-                attention_unfold_mask = attention_mask.view(batch_size, -1)
-                attention_unfold_mask = attention_unfold_mask.unsqueeze(1).unsqueeze(2)
-                attention_unfold_mask = attention_unfold_mask.to(dtype=hidden_states.dtype)  # fp16 compatibility
-                attention_unfold_mask = (1.0 - attention_unfold_mask) * -10000.0
-
-            for block in self.blocks:
-                hidden_states = block(hidden_states=hidden_states,
-                                      attention_mask=attention_unfold_mask,
-                                      first_cache=first_cache)
-
-            if self.last:
-                hidden_states = self.norm(hidden_states)
-                hidden_states = self.head(hidden_states)
-                hidden_states = self.generate(input_ids, hidden_states, top_k=top_k,
-                                              top_p=top_p, temperature=temperature)
-            if torch.all(hidden_states == 50256):
-                break  # hard code here for opt
-            else:
-                input_ids = torch.cat((input_ids, hidden_states.view(-1, 1)), 1)
-                attention_mask = torch.cat((attention_mask, torch.ones(
-                    batch_size, 1, device=torch.cuda.current_device())), 1)
-
-            first_cache = False
-        return input_ids if max_tokens else hidden_states
+        if self.last:
+            hidden_states = self.norm(hidden_states)
+            hidden_states = self.head(hidden_states)
+            hidden_states = self.generate(input_ids, hidden_states, top_k=top_k,
+                                          top_p=top_p, temperature=temperature)
+            input_ids = torch.cat((input_ids, hidden_states.view(-1, 1)), 1) # cat hangs
+        
+        return dict(
+            hidden_states=hidden_states,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_tokens=max_tokens,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+        )
 
     def get_logits_processor(self, top_k: Optional[int] = None, top_p: Optional[float] = None, temperature: Optional[float] = None):
         processor_list = LogitsProcessorList()
