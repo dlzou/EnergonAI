@@ -320,6 +320,21 @@ def opt_6B(**kwargs):
     return create_pipeline_model(**model_kwargs)
 
 
+def opt_13B(**kwargs):
+    model_kwargs = dict(vocab_size=50272,
+                        hidden_size=5120,
+                        depth=40,
+                        max_seq_len=2050,
+                        num_heads=40,
+                        activation=nn.functional.relu,
+                        is_decoder=True,
+                        fused_qkv=False,
+                        model_name="opt",
+                        disable_past_cache=False,
+                        **kwargs)
+    return create_pipeline_model(**model_kwargs)
+
+
 def opt_30B(**kwargs):
     model_kwargs = dict(vocab_size=50272,
                         hidden_size=7168,
